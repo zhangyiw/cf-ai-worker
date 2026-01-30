@@ -7,10 +7,6 @@
 	"name": "cf-ai-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-01-28",
-	"assets": {
-		// The path to the directory containing the `index.html` file to be served at `/`
-		"directory": "./public"
-	},
 	"observability": {
 		"enabled": true
 	},
