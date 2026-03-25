@@ -49,6 +49,26 @@ async function callChatCompletion(model) {
 	return calls[0];
 }
 
+async function createChatCompletionResponse(model, aiResult) {
+	const { default: worker } = await loadWorkerModule();
+	const request = new Request('https://example.com/v1/chat/completions', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			model,
+			messages: [{ role: 'user', content: 'hello' }],
+		}),
+	});
+
+	return worker.fetch(request, {
+		AI: {
+			async run() {
+				return aiResult;
+			},
+		},
+	});
+}
+
 test('routes kimi-k2.5 to the Cloudflare Moonshot model id', async () => {
 	const call = await callChatCompletion('kimi-k2.5');
 	assert.equal(call.cfModel, '@cf/moonshotai/kimi-k2.5');
@@ -57,6 +77,18 @@ test('routes kimi-k2.5 to the Cloudflare Moonshot model id', async () => {
 test('routes glm-4.7-flash to the Cloudflare Z.ai model id', async () => {
 	const call = await callChatCompletion('glm-4.7-flash');
 	assert.equal(call.cfModel, '@cf/zai-org/glm-4.7-flash');
+	assert.deepEqual(call.options.messages, [{ role: 'user', content: 'hello' }]);
+	assert.equal(call.options.prompt, undefined);
+});
+
+test('extracts glm text output from choices[0].text', async () => {
+	const response = await createChatCompletionResponse('glm-4.7-flash', {
+		choices: [{ text: 'GLM_OK' }],
+		usage: { prompt_tokens: 1, completion_tokens: 2 },
+	});
+	const payload = await response.json();
+
+	assert.equal(payload.choices[0].message.content, 'GLM_OK');
 });
 
 test('lists the model ids exposed by the gateway', async () => {
@@ -71,6 +103,44 @@ test('lists the model ids exposed by the gateway', async () => {
 		payload.data.map((model) => model.id),
 		['kimi-k2.5', 'glm-4.7-flash', 'deepseek-r1-qwen32b']
 	);
+});
+
+test('includes raw AI response when debug header is enabled', async () => {
+	const { default: worker } = await loadWorkerModule();
+	const request = new Request('https://example.com/v1/chat/completions', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Debug-AI-Response': '1',
+		},
+		body: JSON.stringify({
+			model: 'glm-4.7-flash',
+			messages: [{ role: 'user', content: 'hello' }],
+		}),
+	});
+
+	const rawAiResponse = {
+		result: {
+			response: 'debug-value',
+		},
+		usage: {
+			prompt_tokens: 2,
+			completion_tokens: 3,
+		},
+	};
+
+	const response = await worker.fetch(request, {
+		AI: {
+			async run() {
+				return rawAiResponse;
+			},
+		},
+	});
+
+	assert.equal(response.status, 200);
+	const payload = await response.json();
+	assert.deepEqual(payload.debug.raw_ai_response, rawAiResponse);
+	assert.equal(payload.debug.cloudflare_model, '@cf/zai-org/glm-4.7-flash');
 });
 
 test.after(async () => {

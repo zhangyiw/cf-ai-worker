@@ -107,6 +107,34 @@ function getCloudflareModel(model: string): string {
 	return MODEL_MAPPING[model] || '@cf/meta/llama-3.1-8b-instruct';
 }
 
+const MESSAGE_NATIVE_MODELS = new Set([
+	'@cf/moonshotai/kimi-k2.5',
+	'@cf/zai-org/glm-4.7-flash',
+]);
+
+function shouldIncludeDebugInfo(request: Request): boolean {
+	return request.headers.get('X-Debug-AI-Response') === '1';
+}
+
+function withDebugInfo(
+	payload: Record<string, unknown>,
+	request: Request,
+	cfModel: string,
+	rawAiResponse: unknown
+): Record<string, unknown> {
+	if (!shouldIncludeDebugInfo(request)) {
+		return payload;
+	}
+
+	return {
+		...payload,
+		debug: {
+			cloudflare_model: cfModel,
+			raw_ai_response: rawAiResponse,
+		},
+	};
+}
+
 function convertMessagesToPrompt(messages: ChatMessage[]): string {
 	return messages
 		.map((msg) => {
@@ -122,6 +150,38 @@ function convertMessagesToPrompt(messages: ChatMessage[]): string {
 			}
 		})
 		.join('\n\n');
+}
+
+function extractAiText(aiResponse: {
+	response?: string;
+	text?: string;
+	choices?: Array<{
+		text?: string;
+		message?: { content?: string };
+	}>;
+}): string {
+	if (typeof aiResponse.response === 'string' && aiResponse.response.length > 0) {
+		return aiResponse.response;
+	}
+
+	if (typeof aiResponse.text === 'string' && aiResponse.text.length > 0) {
+		return aiResponse.text;
+	}
+
+	const firstChoice = aiResponse.choices?.[0];
+	if (!firstChoice) {
+		return '';
+	}
+
+	if (typeof firstChoice.message?.content === 'string' && firstChoice.message.content.length > 0) {
+		return firstChoice.message.content;
+	}
+
+	if (typeof firstChoice.text === 'string' && firstChoice.text.length > 0) {
+		return firstChoice.text;
+	}
+
+	return '';
 }
 
 // Convert Responses API input to prompt string
@@ -420,20 +480,25 @@ async function handleChatCompletion(
 		}
 
 		const cfModel = getCloudflareModel(model);
-		const prompt = convertMessagesToPrompt(messages);
 
 		// Build AI options
-		const aiOptions: Record<string, unknown> = { prompt };
+		const aiOptions: Record<string, unknown> = MESSAGE_NATIVE_MODELS.has(cfModel)
+			? { messages }
+			: { prompt: convertMessagesToPrompt(messages) };
 		if (temperature !== undefined) aiOptions.temperature = temperature;
 		if (max_tokens !== undefined) aiOptions.max_tokens = max_tokens;
 
 		const aiResponse = (await env.AI.run(cfModel, aiOptions)) as {
 			response?: string;
 			text?: string;
+			choices?: Array<{
+				text?: string;
+				message?: { content?: string };
+			}>;
 			usage?: { prompt_tokens?: number; completion_tokens?: number };
 		};
 
-		const content = aiResponse.response || aiResponse.text || '';
+		const content = extractAiText(aiResponse);
 
 		if (stream) {
 			// Streaming response
@@ -473,7 +538,12 @@ async function handleChatCompletion(
 		}
 
 		// Non-streaming response
-		const response = createOpenAIResponse(model || cfModel, content, aiResponse.usage);
+		const response = withDebugInfo(
+			createOpenAIResponse(model || cfModel, content, aiResponse.usage) as Record<string, unknown>,
+			request,
+			cfModel,
+			aiResponse
+		);
 		return new Response(JSON.stringify(response), {
 			headers: { 'Content-Type': 'application/json' },
 		});
@@ -534,10 +604,14 @@ async function handleResponses(
 		const aiResponse = (await env.AI.run(cfModel, aiOptions)) as {
 			response?: string;
 			text?: string;
+			choices?: Array<{
+				text?: string;
+				message?: { content?: string };
+			}>;
 			usage?: { prompt_tokens?: number; completion_tokens?: number };
 		};
 
-		const content = aiResponse.response || aiResponse.text || '';
+		const content = extractAiText(aiResponse);
 
 		if (stream) {
 			// Streaming response with proper event sequence
@@ -606,7 +680,12 @@ async function handleResponses(
 		}
 
 		// Non-streaming response
-		const response = createResponsesResponse(model || cfModel, content, aiResponse.usage);
+		const response = withDebugInfo(
+			createResponsesResponse(model || cfModel, content, aiResponse.usage) as Record<string, unknown>,
+			request,
+			cfModel,
+			aiResponse
+		);
 		return new Response(JSON.stringify(response), {
 			headers: { 'Content-Type': 'application/json' },
 		});
