@@ -96,8 +96,8 @@ function validateApiKey(request: Request, env: Env): Response | null {
 // Model mapping: OpenAI model name -> Cloudflare AI model name
 // Available models: https://developers.cloudflare.com/workers-ai/models/
 const MODEL_MAPPING: Record<string, string> = {
-	'kimi-k2.5': '@cf/moonshotai/kimi-k2.5',
-	'glm-4.7-flash': '@cf/zai-org/glm-4.7-flash',
+	'kimi-k2.5': 'kimi-k2.5',
+	'glm-4.7-flash': 'glm-4.7-flash',
 	// DeepSeek models
 	'deepseek-r1-qwen32b': '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b'
 };
